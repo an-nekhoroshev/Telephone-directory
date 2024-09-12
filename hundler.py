@@ -1,21 +1,28 @@
-# pip install pandas
-# pip install openpyxl
-
 import os, re
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Protection
+from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.cell import Cell
 import copy
+from datetime import datetime
+import xlwings as xw
 
 # Путь к папке с исходниками .csv
-folder_path_csv = r"D:\UK\GitHub"
+folder_path_csv = r"\\10.8.0.52\mail\ЮЖНЫЙ КУЗБАСС\NekhoroshevAN"
+
 # Путь к папке для сохранения справочника
-folder_path_sprav = r"D:\UK\GitHub"
-# Путь к файлу с дополнениями
-add_file_path = "D:/UK/GitHub/Additions.xlsx"
+folder_path_sprav = r"\\10.8.0.50\Prog\Sprav\Telefon\Телефонный справочник ЮК"
+# folder_path_sprav = r"C:\Users\NekhoroshevAN\Documents\SpravUK"
+
 # Путь к целевому файлу справочника
-target_file_path = "D:/UK/GitHub/Telephone_directory.xlsx"
+target_file_path = "P:/Sprav/Telefon/Телефонный справочник ЮК/ПАО Южный Кузбасс.xlsx"
+# target_file_path = "C:/Users/NekhoroshevAN/Documents/SpravUK/ПАО Южный Кузбасс.xlsx"
+
+# Путь к файлу с дополнениями
+add_file_path = "P:/Group/OIS/Отдел ТК/Автообновление справочника ЮК/Дополнения.xlsx"
+
+# Путь к файлу лога
+log_file_path = "P:/Group/OIS/Отдел ТК/Автообновление справочника ЮК/logfile.txt"
 
 # Получаем список файлов .csv в папке
 files = [file for file in os.listdir(folder_path_csv) if file.endswith('.csv')]
@@ -26,9 +33,17 @@ latest_file = max(files, key=lambda f: os.path.getmtime(os.path.join(folder_path
 # Полный путь к последнему измененному файлу
 latest_file_path = os.path.join(folder_path_csv, latest_file)
 
-# Выводим имя выбранного файла
-print(f"\nПоследний измененный файл: {latest_file}\n")
+# Проверяем существование файла лога
+if not os.path.exists(log_file_path):
+    # Создаем файл лога
+    open(log_file_path, 'w').close()
 
+# Записываем лог в файл
+with open(log_file_path, 'r+') as f:
+    content = f.read()
+    f.seek(0)
+    f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} - Последний измененный файл: {latest_file}\n\n" + content)
+    
 # Заголовки для объектов
 headers = [
     "UserName", "AlternameName", "InternetAddress", "Title",
@@ -36,7 +51,7 @@ headers = [
     "CorporatePhone", "ExternalPhone"
 ]
 
-# Словарь весов для каждого значения Title
+# Словарь весов должностей (Title)
 title_weights = {
     "Управляющий директор ПАО \"Южный Кузбасс\"": 1,
     "Директор Департамента": 2,
@@ -259,7 +274,11 @@ try:
     # Считываем количество строк в CSV-файле
     with open(latest_file_path, 'r', encoding='utf-8') as file:
         line_count = sum(1 for line in file)
-    print(f"Количество строк в файле: {line_count}")
+    # Записываем лог в файл
+    with open(log_file_path, 'r+') as f:
+        content = f.read()
+        f.seek(0)
+        f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} - Количество строк в файле: {line_count}\n" + content)
 
     # Читаем все строки файла в массив, пропуская первую строку
     with open(latest_file_path, 'r', encoding='utf-8') as file:
@@ -286,6 +305,25 @@ try:
         # Чистим AlternameName
         parts[1] = parts[1].split("/", 1)[0]
 
+        # Проверяем, что parts[2] (e-mail) не пустой
+        if parts[2]:
+            # Разделяем parts[1] на части по пробелу
+            name_parts = parts[1].split()
+            # Используем предпоследний и последний элемент массива для имени и фамилии
+            if len(name_parts) >= 2:
+                first_name = name_parts[-2]
+                last_name = name_parts[-1]
+                # Создаем строку с именем и фамилией для тела письма
+                body_content = f"{first_name} {last_name},\n\n"
+            else:
+                # Если недостаточно частей для имени и фамилии, используем parts[1] целиком
+                body_content = f"{parts[1]}\n\n"
+
+            # Создаем ссылку mailto с параметром body
+            mailto_link = f'mailto:{parts[2]}?body={body_content}'
+            # Добавляем emoji email в начало строки parts[1]
+            parts[1] = f'=HYPERLINK("{mailto_link}", "📧 {parts[1]}")'
+            
         # Проверяем и заменяем строку перед сплитом
         if "ЭШ-20/90" in parts[5]:
             parts[5] = parts[5].replace("ЭШ-20/90", "ЭШ-20|90")
@@ -334,21 +372,29 @@ try:
         if not parts[9]:
             parts[9] = parts[8].strip() if parts[8] else parts[7].strip()
 
-        # Проверяем наличие четырех цифр подряд в начале строки в поле Department
-        department_field = parts[5]
-
-        # Ищем четыре цифры подряд в начале строки или в середине строки
-        if not re.search(r'\b\d{4}\b', department_field) and not "29." in department_field:
+        # Если после замены parts[9] все еще пустой, добавляем в no_department_objects
+        if not parts[9] and not parts[8] and not parts[7]:
             no_department_objects.append(dict(zip(headers, parts)))
         else:
-            # Создаем объект с соответствующими ключами и значениями
-            if len(parts) == len(headers):  # Убедимся, что количество значений совпадает с количеством заголовков
-                obj = dict(zip(headers, parts))
-                objects.append(obj)
+            # Проверяем наличие четырех цифр подряд в начале строки в поле Department
+            department_field = parts[5]
+
+            # Ищем четыре цифры подряд в начале строки или в середине строки
+            if not re.search(r'\b\d{4}\b', department_field) and not "29." in department_field:
+                no_department_objects.append(dict(zip(headers, parts)))
+            else:
+                # Создаем объект с соответствующими ключами и значениями
+                if len(parts) == len(headers):  # Убедимся, что количество значений совпадает с количеством заголовков
+                    obj = dict(zip(headers, parts))
+                    objects.append(obj)
 
     # Количество объектов в массиве
     object_count = len(objects)
-    print(f"Количество объектов в массиве: {object_count}")
+    # Записываем лог в файл
+    with open(log_file_path, 'r+') as f:
+        content = f.read()
+        f.seek(0)
+        f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} - Количество объектов в массиве: {object_count}\n" + content)    
 
     # Отфильтруем строки с пустым полем Department
     no_department_objects.extend([obj for obj in objects if not obj.get("Department", "").strip()])
@@ -369,6 +415,10 @@ try:
 
     # Сортировка объектов: сначала по Department с учетом приоритета, затем по Title с учетом веса
     with_department_objects.sort(
+        key=lambda x: (department_priority(x.get("Department", "")), x.get("Department", ""), get_title_weight(x.get("Title", "")))
+    )
+    # Сортировка объектов без департамента
+    no_department_objects.sort(
         key=lambda x: (department_priority(x.get("Department", "")), x.get("Department", ""), get_title_weight(x.get("Title", "")))
     )
 
@@ -419,7 +469,7 @@ try:
     filtered_df = pd.DataFrame(with_department_objects, columns=["Title", "AlternameName", "ExternalPhone", "Department"])
     no_department_df = pd.DataFrame(no_department_objects, columns=["Title", "AlternameName", "ExternalPhone", "Department"])
 
-    output_file_path = os.path.join(folder_path_sprav, "Telephone_directory.xlsx")
+    output_file_path = os.path.join(folder_path_sprav, "ПАО Южный Кузбасс.xlsx")
     with pd.ExcelWriter(output_file_path, engine="openpyxl") as writer:
         filtered_df.to_excel(writer, index=False, header=False, sheet_name="ЮК")  # Лист "ЮК"
         no_department_df.to_excel(writer, index=False, header=False, sheet_name="NoDepartment")  # Лист "NoDepartment"
@@ -450,7 +500,7 @@ try:
     ws_with_department['A2'].font = header_font
     ws_with_department['A2'].alignment = alignment_center
 
-    # Закрепляем первые две строки вверху страницы
+    # Закрепляем первые три строки вверху страницы
     ws_with_department.freeze_panes = 'A4'
 
     # Форматирование столбцов (начиная с 3-й строки)
@@ -458,7 +508,7 @@ try:
         "A": {"width": 50, "font": Font(name="Times New Roman", size=10, bold=True, italic=True), "wrap_text": True},  # Title with wrap text
         "B": {"width": 62, "font": Font(name="Times New Roman", size=12, bold=True)},  # AlternameName
         "C": {"width": 30, "font": Font(name="Times New Roman", size=14, bold=True), "alignment": Alignment(horizontal="center", vertical="center")},  # ExternalPhone
-        "D": {"width": 30, "font": Font(size=10, color="FFFFFF"), "alignment": Alignment(vertical="center")}  # Department (No formatting needed)
+        "D": {"width": 9, "font": Font(size=10), "alignment": Alignment(vertical="center")}  # Department
     }
 
     for col, fmt in column_formats.items():
@@ -483,7 +533,7 @@ try:
         if "font" in fmt:
             for cell in ws_no_department[col]:
                 cell.font = fmt["font"]
-                if col in ["A", "B"]:
+                if col in ["A", "B", "D"]:
                     cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=fmt.get("wrap_text", False))
                 elif col == "C":
                     cell.alignment = fmt.get("alignment", Alignment(horizontal="center", vertical="center"))
@@ -572,18 +622,29 @@ try:
                 cell = sheet.cell(row=corrected_index, column=col)
                 cell.fill = fill_style
 
-        print(f"Добавлено {len(rows_to_insert)} заголовков.")
+        # Записываем лог в файл
+        with open(log_file_path, 'r+') as f:
+            content = f.read()
+            f.seek(0)
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} - Добавлено {len(rows_to_insert)} заголовков\n" + content)    
 
     process_departments_and_insert_rows(ws_with_department, department_column_index=4)
 
     # Сохраняем форматированный файл и с новым именем листа
     wb.save(output_file_path)
 
-    print(f"\nДанные сохранены и отформатированы в файл: {output_file_path}")
-
+    # Записываем лог в файл
+    with open(log_file_path, 'r+') as f:
+        content = f.read()
+        f.seek(0)
+        f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} - Данные сохранены и отформатированы в файл: {output_file_path}\n" + content)    
+    
 except Exception as e:
-    print(f"Ошибка при чтении файла: {e}")
-
+    # Записываем лог в файл
+    with open(log_file_path, 'r+') as f:
+        content = f.read()
+        f.seek(0)
+        f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} - Ошибка при чтении файла: {e}\n" + content)    
 
 # ДОБАВЛЕНИЕ ДОПОЛНЕНИЙ
 
@@ -666,8 +727,27 @@ for merged_range in merged_ranges:
         ws_target.merge_cells(start_row=new_start_row, start_column=merged_range.min_col,
                               end_row=new_end_row, end_column=merged_range.max_col)
 
+# Удаляем четвертый столбец с департаментами
+ws_target.delete_cols(4)
+
 # Сохранение изменений в целевом файле
 wb_target.save(target_file_path)
 
-# Вывод количества вставленных строк на экран
-print(f"Количество вставленных строк: {row_count_add}")
+# Вывод количества вставленных строк в лог
+with open(log_file_path, 'r+') as f:
+    content = f.read()
+    f.seek(0)
+    f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} - Количество вставленных строк: {row_count_add}\n" + content)    
+
+# Используем xlwings для пересчета формул
+app = xw.App(visible=False)
+wb = xw.Book(target_file_path)
+wb.app.calculate()
+wb.save()
+wb.close()
+app.quit()
+# Записываем лог в файл
+with open(log_file_path, 'r+') as f:
+    content = f.read()
+    f.seek(0)
+    f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} - Формулы пересчитаны\n" + content)    
